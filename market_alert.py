@@ -1,8 +1,14 @@
 """
-매일 08:00 KST(한국시간) 기준으로 최근 24시간 동안
+[매일 체크] 08:00 KST(한국시간) 기준으로 최근 24시간 동안
 1) 미국 VIX 지수가 30 이상이었는지
 2) 미국 S&P500 지수가 전일 종가 대비 7% 이상 급락(서킷브레이커 수준)했는지
 를 확인해서, 조건에 해당하면 텔레그램으로 알림을 보내는 스크립트.
+
+[매월 테스트] 매월 1일 09:00 KST에는 조건 충족 여부와 상관없이
+- VIX 지수
+- S&P500 전일 종가 / 당일 종가
+- 전일 대비 당일 증감률
+을 무조건 텔레그램으로 보내서, 시스템이 잘 작동하는지 확인할 수 있게 합니다.
 
 주의: "서킷브레이커가 실제로 발동됐는지"를 알려주는 공식 API는 없기 때문에,
 S&P500(^GSPC) 지수의 급락폭(7%/13%/20%)을 대리 지표로 사용합니다.
@@ -23,6 +29,9 @@ CIRCUIT_BREAKER_LEVELS = [
     (13.0, "2단계"),
     (7.0, "1단계"),
 ]
+
+# GitHub Actions 워크플로우의 매월 테스트용 cron 표현식과 동일해야 함
+MONTHLY_TEST_CRON = "0 0 1 * *"
 
 
 def send_telegram(message: str) -> None:
@@ -88,7 +97,65 @@ def check_circuit_breaker():
     return triggered, drop_pct, level_label
 
 
+def get_sp500_two_closes():
+    """S&P500의 최근 두 거래일 종가(전일, 당일)와 증감률(%)을 반환한다."""
+    sp500 = yf.Ticker("^GSPC")
+    daily = sp500.history(period="10d", interval="1d")
+    if len(daily) < 2:
+        return None, None, None
+
+    prev_close = float(daily["Close"].iloc[-2])
+    latest_close = float(daily["Close"].iloc[-1])
+    change_pct = (latest_close - prev_close) / prev_close * 100
+    return prev_close, latest_close, change_pct
+
+
+def send_monthly_test_report():
+    """매월 1일 09:00 KST에 조건과 상관없이 현재 지표를 요약해서 보낸다."""
+    now_kst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+
+    vix_value, _ = check_vix()
+    prev_close, latest_close, change_pct = get_sp500_two_closes()
+
+    lines = [
+        "📊 [테스트 알림] 시장 지표 정기 점검",
+        f"(발송 시각: {now_kst.strftime('%Y-%m-%d %H:%M')} KST)",
+        "",
+    ]
+
+    if vix_value is not None:
+        lines.append(f"• VIX 지수: {vix_value:.2f}")
+    else:
+        lines.append("• VIX 지수: 조회 실패")
+
+    if prev_close is not None:
+        sign = "+" if change_pct >= 0 else ""
+        lines.append(f"• S&P500 전일 종가: {prev_close:,.2f}")
+        lines.append(f"• S&P500 당일 종가: {latest_close:,.2f}")
+        lines.append(f"• 전일 대비 증감률: {sign}{change_pct:.2f}%")
+    else:
+        lines.append("• S&P500 종가: 조회 실패")
+
+    lines += ["", "(이 알림은 시스템이 정상 작동 중인지 확인하기 위한 월간 테스트입니다.)"]
+
+    message = "\n".join(lines)
+    send_telegram(message)
+    print("월간 테스트 알림을 발송했습니다.")
+    print(message)
+
+
 def main():
+    trigger_cron = os.environ.get("TRIGGER_CRON", "")
+    manual_mode = os.environ.get("MANUAL_MODE", "")
+
+    if trigger_cron == MONTHLY_TEST_CRON or manual_mode == "monthly_test":
+        send_monthly_test_report()
+        return
+
+    _run_daily_check()
+
+
+def _run_daily_check():
     now_kst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     print(f"체크 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M')}")
 
