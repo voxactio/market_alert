@@ -2,9 +2,20 @@ name: Market Alert (VIX / Circuit Breaker Check)
 
 on:
   schedule:
-    # 한국시간(KST) 매일 08:00 = UTC 전날 23:00
+    # 매일 08:00 KST = UTC 전날 23:00 → 정기 체크(조건 충족 시에만 알림)
     - cron: "0 23 * * *"
-  workflow_dispatch: {}
+    # 매월 1일 09:00 KST = UTC 1일 00:00 → 무조건 테스트 알림 발송
+    - cron: "0 0 1 * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "수동 실행 모드 선택"
+        required: false
+        default: "check"
+        type: choice
+        options:
+          - check          # 평소처럼 조건 충족 시에만 알림
+          - monthly_test   # 조건과 상관없이 테스트 알림 강제 발송
 
 jobs:
   check-market:
@@ -25,4 +36,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 어떤 스케줄로 실행됐는지 스크립트에 전달 (매월 테스트 여부 판단용)
+          TRIGGER_CRON: ${{ github.event.schedule }}
+          MANUAL_MODE: ${{ github.event.inputs.mode }}
         run: python market_alert.py
